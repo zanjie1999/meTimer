@@ -149,6 +149,35 @@ namespace MeTimer
 
             return Format((long)Math.Ceiling(remainingSeconds));
         }
+
+        public static string FormatClock(long totalSeconds, bool alwaysShowHours)
+        {
+            if (totalSeconds < 0)
+            {
+                totalSeconds = 0;
+            }
+
+            if (alwaysShowHours || totalSeconds >= 3600)
+            {
+                return Format(totalSeconds);
+            }
+
+            long minutes = totalSeconds / 60;
+            long seconds = totalSeconds % 60;
+
+            return minutes.ToString("00", CultureInfo.InvariantCulture)
+                + ":" + seconds.ToString("00", CultureInfo.InvariantCulture);
+        }
+
+        public static string FormatCountdownClock(double remainingSeconds, bool alwaysShowHours)
+        {
+            if (remainingSeconds < 0)
+            {
+                remainingSeconds = 0;
+            }
+
+            return FormatClock((long)Math.Ceiling(remainingSeconds), alwaysShowHours);
+        }
     }
 
     internal sealed class TimerRecord
@@ -223,6 +252,7 @@ namespace MeTimer
         private NumericUpDown _hoursInput;
         private NumericUpDown _minutesInput;
         private NumericUpDown _secondsInput;
+        private CheckBox _showHoursCheck;
         private Button _startButton;
         private Button _stopButton;
         private Button _toggleDisplayButton;
@@ -237,13 +267,14 @@ namespace MeTimer
         private TimerPhase _phase;
         private int _sessionPlannedSeconds;
         private DateTime _sessionStartedAt;
-        private string _stoppedMainText;
-        private string _stoppedDisplayText;
+        private long _stoppedMainSeconds;
+        private long _stoppedDisplaySeconds;
         private string _stoppedStatusText;
         private int _nextSerial;
         private bool _initializing;
         private bool _closeConfirmed;
         private bool _paused;
+        private bool _showHours;
 
         public ControlForm()
         {
@@ -418,17 +449,42 @@ namespace MeTimer
 
         private Control BuildSessionInfo()
         {
+            TableLayoutPanel row = new TableLayoutPanel();
+            row.Dock = DockStyle.Top;
+            row.AutoSize = true;
+            row.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            row.ColumnCount = 2;
+            row.RowCount = 1;
+            row.BackColor = UiTheme.PageBack;
+            row.Margin = Dpi.Pad(2, 0, 0, 2);
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
             _sessionInfoLabel = new Label();
             _sessionInfoLabel.AutoSize = false;
-            _sessionInfoLabel.Dock = DockStyle.Top;
+            _sessionInfoLabel.Dock = DockStyle.Fill;
             _sessionInfoLabel.Height = Dpi.S(22);
             _sessionInfoLabel.Font = UiTheme.SmallFont;
             _sessionInfoLabel.ForeColor = UiTheme.Muted;
             _sessionInfoLabel.TextAlign = ContentAlignment.MiddleLeft;
             _sessionInfoLabel.AutoEllipsis = true;
-            _sessionInfoLabel.Margin = Dpi.Pad(2, 0, 0, 2);
+            _sessionInfoLabel.Margin = new Padding(0);
             _sessionInfoLabel.Text = "等待开始";
-            return _sessionInfoLabel;
+
+            _showHoursCheck = new CheckBox();
+            _showHoursCheck.AutoSize = true;
+            _showHoursCheck.Text = "显示小时";
+            _showHoursCheck.Checked = false;
+            _showHoursCheck.Font = UiTheme.SmallFont;
+            _showHoursCheck.ForeColor = UiTheme.Muted;
+            _showHoursCheck.Anchor = AnchorStyles.Right;
+            _showHoursCheck.Margin = Dpi.Pad(8, 0, 2, 0);
+            _showHoursCheck.AccessibleDescription = "勾选后计时时间始终显示小时；默认在不足 1 小时时显示分:秒。";
+
+            row.Controls.Add(_sessionInfoLabel, 0, 0);
+            row.Controls.Add(_showHoursCheck, 1, 0);
+            return row;
         }
 
         private Control BuildSettingsCard()
@@ -526,6 +582,7 @@ namespace MeTimer
 
             actionFlow.Controls.Add(_startButton);
             actionFlow.Controls.Add(_stopButton);
+
             setupRow.Controls.Add(optionsFlow, 0, 0);
             setupRow.Controls.Add(actionFlow, 1, 0);
 
@@ -787,6 +844,7 @@ namespace MeTimer
             _hoursInput.ValueChanged += SettingInput_ValueChanged;
             _minutesInput.ValueChanged += SettingInput_ValueChanged;
             _secondsInput.ValueChanged += SettingInput_ValueChanged;
+            _showHoursCheck.CheckedChanged += ShowHoursCheck_CheckedChanged;
 
             _startButton.Click += StartButton_Click;
             _stopButton.Click += StopButton_Click;
@@ -838,7 +896,7 @@ namespace MeTimer
 
                 if (initial)
                 {
-                    PositionDisplayAtTopLeft(FindSecondaryScreen() ?? Screen.PrimaryScreen);
+                    PositionDisplayAtDefaultLocation(FindSecondaryScreen() ?? Screen.PrimaryScreen);
                 }
 
                 _display.Opacity = 1D;
@@ -878,14 +936,17 @@ namespace MeTimer
             return Screen.PrimaryScreen;
         }
 
-        private void PositionDisplayAtTopLeft(Screen screen)
+        private void PositionDisplayAtDefaultLocation(Screen screen)
         {
             if (screen == null || _display == null || _display.IsDisposed)
             {
                 return;
             }
 
-            _display.Location = screen.WorkingArea.Location;
+            Rectangle area = screen.WorkingArea;
+            int x = Math.Max(area.Left, area.Right - _display.Width);
+            int y = Math.Min(Math.Max(area.Top, area.Top + _display.Height), area.Bottom - _display.Height);
+            _display.Location = new Point(x, y);
         }
 
         private void RefreshDisplayUi()
@@ -948,7 +1009,7 @@ namespace MeTimer
 
             Screen current = GetDisplayScreen();
             Screen target = (current != null && !current.Primary) ? Screen.PrimaryScreen : secondary;
-            PositionDisplayAtTopLeft(target);
+            PositionDisplayAtDefaultLocation(target);
 
             if (_display.Visible)
             {
@@ -1084,6 +1145,17 @@ namespace MeTimer
             RefreshTimerUi(true);
         }
 
+        private void ShowHoursCheck_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_initializing)
+            {
+                return;
+            }
+
+            _showHours = _showHoursCheck.Checked;
+            RefreshTimerUi(true);
+        }
+
         private void SettingInput_ValueChanged(object sender, EventArgs e)
         {
             if (_initializing)
@@ -1212,9 +1284,8 @@ namespace MeTimer
 
             long overtimeSeconds = 0;
             int? plannedSeconds = null;
-            bool hasOvertime = false;
-            string stoppedMainText;
-            string stoppedDisplayText;
+            long stoppedMainSeconds;
+            long stoppedDisplaySeconds;
 
             if (_sessionMode == TimerMode.Countdown)
             {
@@ -1222,15 +1293,14 @@ namespace MeTimer
                 if (actualSeconds >= _sessionPlannedSeconds)
                 {
                     overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
-                    hasOvertime = overtimeSeconds > 0;
-                    stoppedMainText = TimeText.Format(overtimeSeconds);
-                    stoppedDisplayText = "00:00:00";
+                    stoppedMainSeconds = overtimeSeconds;
+                    stoppedDisplaySeconds = 0;
                 }
                 else
                 {
                     long remainingSeconds = (long)_sessionPlannedSeconds - actualSeconds;
-                    stoppedMainText = TimeText.Format(remainingSeconds);
-                    stoppedDisplayText = stoppedMainText;
+                    stoppedMainSeconds = remainingSeconds;
+                    stoppedDisplaySeconds = remainingSeconds;
                 }
             }
             else
@@ -1241,12 +1311,11 @@ namespace MeTimer
                     if (actualSeconds > _sessionPlannedSeconds)
                     {
                         overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
-                        hasOvertime = overtimeSeconds > 0;
                     }
                 }
 
-                stoppedMainText = TimeText.Format(actualSeconds);
-                stoppedDisplayText = stoppedMainText;
+                stoppedMainSeconds = actualSeconds;
+                stoppedDisplaySeconds = actualSeconds;
             }
 
             TimerRecord record = new TimerRecord();
@@ -1259,9 +1328,9 @@ namespace MeTimer
             _records.Add(record);
 
             _phase = TimerPhase.Stopped;
-            _stoppedMainText = stoppedMainText;
-            _stoppedDisplayText = stoppedDisplayText;
-            _stoppedStatusText = hasOvertime
+            _stoppedMainSeconds = stoppedMainSeconds;
+            _stoppedDisplaySeconds = stoppedDisplaySeconds;
+            _stoppedStatusText = overtimeSeconds > 0
                 ? "已停止 · 本轮用时 " + TimeText.Format(actualSeconds) + " · 超时 " + TimeText.Format(overtimeSeconds)
                 : "已停止 · 本轮用时 " + TimeText.Format(actualSeconds);
 
@@ -1307,7 +1376,7 @@ namespace MeTimer
                     {
                         double elapsed = _stopwatch.Elapsed.TotalSeconds;
                         double remaining = _sessionPlannedSeconds - elapsed;
-                        mainText = TimeText.FormatCountdownRemaining(remaining);
+                        mainText = TimeText.FormatCountdownClock(remaining, _showHours);
                         displayText = mainText;
                         statusText = _paused ? "已暂停 · 点击“继续计时”恢复" : "倒计时中";
                     }
@@ -1320,7 +1389,7 @@ namespace MeTimer
                             ? Math.Max(0, elapsedSeconds - _sessionPlannedSeconds)
                             : 0;
 
-                        mainText = TimeText.Format(elapsedSeconds);
+                        mainText = TimeText.FormatClock(elapsedSeconds, _showHours);
                         displayText = mainText;
 
                         if (_paused)
@@ -1343,29 +1412,23 @@ namespace MeTimer
 
                 case TimerPhase.Overtime:
                     long overtime = (long)Math.Floor(_stopwatch.Elapsed.TotalSeconds) - _sessionPlannedSeconds;
-                    mainText = TimeText.Format(overtime);
-                    displayText = "00:00:00";
+                    mainText = TimeText.FormatClock(overtime, _showHours);
+                    displayText = TimeText.FormatClock(0, _showHours);
                     statusText = _paused
                         ? "已暂停 · 本轮已超时"
-                        : "已超时，请点击“停止”结束本轮 · 计时窗停在 00:00:00";
+                        : "已超时，请点击“停止”结束本轮 · 计时窗已停住";
                     alert = !_paused;
                     break;
 
                 case TimerPhase.Stopped:
-                    mainText = _stoppedMainText;
-                    displayText = _stoppedDisplayText;
+                    mainText = TimeText.FormatClock(_stoppedMainSeconds, _showHours);
+                    displayText = TimeText.FormatClock(_stoppedDisplaySeconds, _showHours);
                     statusText = _stoppedStatusText;
                     break;
 
                 default:
-                    if (_mode == TimerMode.Countdown)
-                    {
-                        mainText = TimeText.Format(ReadConfiguredSeconds());
-                    }
-                    else
-                    {
-                        mainText = "00:00:00";
-                    }
+                    long readySeconds = _mode == TimerMode.Countdown ? ReadConfiguredSeconds() : 0;
+                    mainText = TimeText.FormatClock(readySeconds, _showHours);
                     displayText = mainText;
                     statusText = "准备就绪";
                     break;
@@ -1655,7 +1718,7 @@ namespace MeTimer
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
             BackColor = UiTheme.TimerBack;
-            ClientSize = new Size(Dpi.S(240), Dpi.S(70));
+            ClientSize = new Size(Dpi.S(174), Dpi.S(60));
             MinimumSize = new Size(Dpi.S(120), Dpi.S(40));
             Padding = Dpi.Pad(3, 2, 3, 2);
             DoubleBuffered = true;
