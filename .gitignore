@@ -1,0 +1,27 @@
+# 构建产物
+/meTimer.exe
+/MeTimer.build.exe
+*.pdb
+*.log
+
+# 本地测试与临时文件
+/_diag/
+/artifacts/
+/test-results/
+*.tmp
+
+# 编辑器与 IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
