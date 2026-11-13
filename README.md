@@ -4,15 +4,13 @@
 
 **Windows 10+ · 单文件 · 免安装**
 
-> **[前往 Releases 下载最新版本](https://github.com/zanjie1999/meTimer/releases/latest)**
->
-> 请下载 `meTimer.exe`，无需安装，双击即可运行。
+**[前往 Releases 下载最新版本](https://github.com/zanjie1999/meTimer/releases/latest)**
 
-
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/5e9b183b-21a3-4699-8ada-2d397597a1b1" />
 
 ## 功能
 
-- **双窗口**：窗口 1 为控制台；窗口 2 为无边框计时窗，始终置顶。
+- **双窗口**：窗口 1 为控制台；窗口 2 为无边框计时窗，始终置顶，大小可调。
 - **倒计时 / 顺计时**：倒计时默认 15:00；顺计时也可以设置计划时长，设为 0 表示不限时长。
 - **开始 / 暂停 / 继续**：开始和暂停使用同一个按钮；暂停时控制窗计时区变为橙色。
 - **超时提醒**：倒计时归零后，计时窗停在 `00:00:00`，控制窗变红并继续累计超时；顺计时超过设定时长后，控制窗变红，计时继续。
