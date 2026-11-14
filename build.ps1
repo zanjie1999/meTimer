@@ -10,15 +10,15 @@ $icon = Join-Path $root 'app.ico'
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
 if (-not (Test-Path -LiteralPath $csc)) {
-    throw "æ‰¾ä¸åˆ° .NET Framework C# ç¼–è¯‘å™¨: $csc"
+    throw "ÕÒ²»µ½ .NET Framework C# ±àÒëÆ÷: $csc"
 }
 
 if (-not (Test-Path -LiteralPath $source)) {
-    throw "æ‰¾ä¸åˆ°æºç : $source"
+    throw "ÕÒ²»µ½Ô´Âë: $source"
 }
 
 if (-not (Test-Path -LiteralPath $icon)) {
-    throw "æ‰¾ä¸åˆ°åº”ç”¨å›¾æ ‡: $icon"
+    throw "ÕÒ²»µ½Ó¦ÓÃÍ¼±ê: $icon"
 }
 
 $references = @(
@@ -48,11 +48,11 @@ $arguments = @(
 
 & $csc $arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "ç¼–è¯‘å¤±è´¥ï¼Œé€€å‡ºç  $LASTEXITCODE"
+    throw "±àÒëÊ§°Ü£¬ÍË³öÂë $LASTEXITCODE"
 }
 
 if (-not (Test-Path -LiteralPath $tempOutput)) {
-    throw "ç¼–è¯‘æœªç”Ÿæˆè¾“å‡ºæ–‡ä»¶"
+    throw "±àÒëÎ´Éú³ÉÊä³öÎÄ¼ş"
 }
 
 if (Test-Path -LiteralPath $output) {
@@ -62,5 +62,5 @@ if (Test-Path -LiteralPath $output) {
 Move-Item -LiteralPath $tempOutput -Destination $output -Force
 
 $file = Get-Item -LiteralPath $output
-Write-Host ("å·²ç”Ÿæˆ: {0}" -f $file.FullName)
-Write-Host ("å¤§å°: {0:N0} å­—èŠ‚ ({1:N1} KB)" -f $file.Length, ($file.Length / 1KB))
+Write-Host ("ÒÑÉú³É: {0}" -f $file.FullName)
+Write-Host ("´óĞ¡: {0:N0} ×Ö½Ú ({1:N1} KB)" -f $file.Length, ($file.Length / 1KB))

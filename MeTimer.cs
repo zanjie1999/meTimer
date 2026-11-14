@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyProduct("咩计时")]
 [assembly: System.Reflection.AssemblyDescription("导播演讲计时工具")]
 [assembly: System.Reflection.AssemblyCompany("郑羊羊")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 namespace MeTimer
 {
@@ -253,6 +253,8 @@ namespace MeTimer
         private NumericUpDown _minutesInput;
         private NumericUpDown _secondsInput;
         private CheckBox _showHoursCheck;
+        private TrackBar _opacitySlider;
+        private Label _opacityValueLabel;
         private Button _startButton;
         private Button _stopButton;
         private Button _toggleDisplayButton;
@@ -275,6 +277,11 @@ namespace MeTimer
         private bool _closeConfirmed;
         private bool _paused;
         private bool _showHours;
+        private double _displayOpacity;
+
+        private const int DefaultDisplayOpacityPercent = 80;
+        private const int MinDisplayOpacityPercent = 10;
+        private const int MaxDisplayOpacityPercent = 100;
 
         public ControlForm()
         {
@@ -288,6 +295,7 @@ namespace MeTimer
             _mode = TimerMode.Countdown;
             _phase = TimerPhase.Ready;
             _nextSerial = 1;
+            _displayOpacity = DefaultDisplayOpacityPercent / 100D;
             _initializing = true;
 
             AutoScaleMode = AutoScaleMode.None;
@@ -311,6 +319,7 @@ namespace MeTimer
             WireEvents();
             _initializing = false;
 
+            ApplyDisplayOpacity();
             RefreshInteractiveState();
             UpdateSessionInfo();
             RefreshTimerUi(true);
@@ -453,11 +462,12 @@ namespace MeTimer
             row.Dock = DockStyle.Top;
             row.AutoSize = true;
             row.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            row.ColumnCount = 2;
+            row.ColumnCount = 3;
             row.RowCount = 1;
             row.BackColor = UiTheme.PageBack;
             row.Margin = Dpi.Pad(2, 0, 0, 2);
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -483,8 +493,61 @@ namespace MeTimer
             _showHoursCheck.AccessibleDescription = "勾选后计时时间始终显示小时；默认在不足 1 小时时显示分:秒。";
 
             row.Controls.Add(_sessionInfoLabel, 0, 0);
-            row.Controls.Add(_showHoursCheck, 1, 0);
+            row.Controls.Add(BuildOpacityControl(), 1, 0);
+            row.Controls.Add(_showHoursCheck, 2, 0);
             return row;
+        }
+
+        private Control BuildOpacityControl()
+        {
+            FlowLayoutPanel flow = new FlowLayoutPanel();
+            flow.AutoSize = true;
+            flow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            flow.WrapContents = false;
+            flow.FlowDirection = FlowDirection.LeftToRight;
+            flow.BackColor = UiTheme.PageBack;
+            flow.Anchor = AnchorStyles.Right;
+            flow.Margin = Dpi.Pad(8, 0, 0, 0);
+            flow.Padding = new Padding(0);
+
+            Label caption = new Label();
+            caption.AutoSize = false;
+            caption.Text = "计时窗透明度";
+            caption.Font = UiTheme.SmallFont;
+            caption.ForeColor = UiTheme.Muted;
+            caption.TextAlign = ContentAlignment.MiddleRight;
+            caption.Size = new Size(Dpi.S(84), Dpi.S(22));
+            caption.Margin = Dpi.Pad(0, 0, 4, 0);
+            caption.AccessibleDescription = "控制窗口 2（计时窗）的透明度，数值越小越透明。";
+
+            _opacitySlider = new TrackBar();
+            _opacitySlider.AutoSize = false;
+            _opacitySlider.Minimum = MinDisplayOpacityPercent;
+            _opacitySlider.Maximum = MaxDisplayOpacityPercent;
+            _opacitySlider.TickFrequency = 10;
+            _opacitySlider.SmallChange = 1;
+            _opacitySlider.LargeChange = 10;
+            _opacitySlider.Value = DefaultDisplayOpacityPercent;
+            _opacitySlider.TickStyle = TickStyle.None;
+            _opacitySlider.BackColor = UiTheme.PageBack;
+            _opacitySlider.Size = new Size(Dpi.S(104), Dpi.S(22));
+            _opacitySlider.Margin = Dpi.Pad(0, 0, 4, 0);
+            _opacitySlider.AccessibleName = "计时窗透明度";
+            _opacitySlider.AccessibleDescription = "拖动以调节窗口 2（计时窗）的透明度，默认 80%。";
+
+            _opacityValueLabel = new Label();
+            _opacityValueLabel.AutoSize = false;
+            _opacityValueLabel.Text = DefaultDisplayOpacityPercent.ToString(CultureInfo.InvariantCulture) + "%";
+            _opacityValueLabel.Font = UiTheme.SmallFont;
+            _opacityValueLabel.ForeColor = UiTheme.Muted;
+            _opacityValueLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _opacityValueLabel.Size = new Size(Dpi.S(34), Dpi.S(22));
+            _opacityValueLabel.Margin = new Padding(0);
+
+            flow.Controls.Add(caption);
+            flow.Controls.Add(_opacitySlider);
+            flow.Controls.Add(_opacityValueLabel);
+            return flow;
         }
 
         private Control BuildSettingsCard()
@@ -845,6 +908,7 @@ namespace MeTimer
             _minutesInput.ValueChanged += SettingInput_ValueChanged;
             _secondsInput.ValueChanged += SettingInput_ValueChanged;
             _showHoursCheck.CheckedChanged += ShowHoursCheck_CheckedChanged;
+            _opacitySlider.ValueChanged += OpacitySlider_ValueChanged;
 
             _startButton.Click += StartButton_Click;
             _stopButton.Click += StopButton_Click;
@@ -899,7 +963,7 @@ namespace MeTimer
                     PositionDisplayAtDefaultLocation(FindSecondaryScreen() ?? Screen.PrimaryScreen);
                 }
 
-                _display.Opacity = 1D;
+                _display.Opacity = _displayOpacity;
                 _display.EnsureTopMost();
             }
 
@@ -993,6 +1057,7 @@ namespace MeTimer
             else
             {
                 _display.Show();
+                ApplyDisplayOpacity();
                 _display.EnsureTopMost();
             }
 
@@ -1154,6 +1219,61 @@ namespace MeTimer
 
             _showHours = _showHoursCheck.Checked;
             RefreshTimerUi(true);
+        }
+
+        private void OpacitySlider_ValueChanged(object sender, EventArgs e)
+        {
+            if (_initializing)
+            {
+                return;
+            }
+
+            ApplyDisplayOpacity();
+        }
+
+        private void ApplyDisplayOpacity()
+        {
+            if (_opacitySlider == null)
+            {
+                return;
+            }
+
+            int percent = _opacitySlider.Value;
+            if (percent < MinDisplayOpacityPercent)
+            {
+                percent = MinDisplayOpacityPercent;
+            }
+            else if (percent > MaxDisplayOpacityPercent)
+            {
+                percent = MaxDisplayOpacityPercent;
+            }
+
+            _displayOpacity = percent / 100D;
+
+            if (_opacityValueLabel != null && !_opacityValueLabel.IsDisposed)
+            {
+                string text = percent.ToString(CultureInfo.InvariantCulture) + "%";
+                if (_opacityValueLabel.Text != text)
+                {
+                    _opacityValueLabel.Text = text;
+                }
+            }
+
+            if (_display == null || _display.IsDisposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _display.Opacity = _displayOpacity;
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (ArgumentException)
+            {
+            }
         }
 
         private void SettingInput_ValueChanged(object sender, EventArgs e)
