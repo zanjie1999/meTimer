@@ -6,11 +6,11 @@
 
 **[前往 Releases 下载最新版本](https://github.com/zanjie1999/meTimer/releases/latest)**
 
-<img width="700" alt="image" src="https://github.com/user-attachments/assets/2c4a17b5-3631-463e-b412-0ad9a95051c1" />
+<img width="700" alt="image" src="https://github.com/user-attachments/assets/3dd3b062-8fe9-472d-8732-25ab7c09b7f0" />
 
 ## 功能
 
-- **双窗口**：窗口 1 为控制台；窗口 2 为无边框计时窗，始终置顶，大小可调，可切换显示小时。
+- **双窗口**：窗口 1 为控制台；窗口 2 为无边框计时窗，始终置顶，大小、透明度可调，可切换显示小时。
 - **倒计时 / 顺计时**：倒计时默认 15:00；顺计时也可以设置计划时长，设为 0 表示不限时长。
 - **开始 / 暂停 / 继续**：开始和暂停使用同一个按钮；暂停时控制窗计时区变为橙色。
 - **超时提醒**：倒计时归零后，计时窗停在 `00:00:00`，控制窗变红并继续累计超时；顺计时超过设定时长后，控制窗变红，计时继续。
