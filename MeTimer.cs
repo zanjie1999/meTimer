@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyProduct("咩计时")]
 [assembly: System.Reflection.AssemblyDescription("导播演讲计时工具")]
 [assembly: System.Reflection.AssemblyCompany("郑羊羊")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace MeTimer
 {
@@ -140,6 +140,16 @@ namespace MeTimer
                 + ":" + seconds.ToString("00", CultureInfo.InvariantCulture);
         }
 
+        public static string FormatSigned(long totalSeconds)
+        {
+            if (totalSeconds < 0)
+            {
+                return "-" + Format(-totalSeconds);
+            }
+
+            return Format(totalSeconds);
+        }
+
         public static string FormatCountdownRemaining(double remainingSeconds)
         {
             if (remainingSeconds < 0)
@@ -183,7 +193,9 @@ namespace MeTimer
     internal sealed class TimerRecord
     {
         public int Serial;
+        public string Remark = string.Empty;
         public string StartTime;
+        public string EndTime;
         public int? PlannedSeconds;
         public long ActualSeconds;
         public long OvertimeSeconds;
@@ -193,6 +205,19 @@ namespace MeTimer
             get
             {
                 return PlannedSeconds.HasValue ? TimeText.Format(PlannedSeconds.Value) : "—";
+            }
+        }
+
+        public string TimeRangeText
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(EndTime))
+                {
+                    return StartTime;
+                }
+
+                return StartTime + "-" + EndTime;
             }
         }
     }
@@ -777,7 +802,8 @@ namespace MeTimer
             _recordsGrid.AllowUserToDeleteRows = false;
             _recordsGrid.AllowUserToOrderColumns = false;
             _recordsGrid.AllowUserToResizeRows = false;
-            _recordsGrid.ReadOnly = true;
+            _recordsGrid.ReadOnly = false;
+            _recordsGrid.EditMode = DataGridViewEditMode.EditOnEnter;
             _recordsGrid.MultiSelect = false;
             _recordsGrid.RowHeadersVisible = false;
             _recordsGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
@@ -801,36 +827,52 @@ namespace MeTimer
             DataGridViewTextBoxColumn serialColumn = new DataGridViewTextBoxColumn();
             serialColumn.Name = "serialColumn";
             serialColumn.HeaderText = "序号";
-            serialColumn.FillWeight = 12F;
-            serialColumn.MinimumWidth = Dpi.S(44);
+            serialColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            serialColumn.Width = Dpi.S(45);
+            serialColumn.MinimumWidth = Dpi.S(38);
+            serialColumn.ReadOnly = true;
             serialColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
+
+            DataGridViewTextBoxColumn remarkColumn = new DataGridViewTextBoxColumn();
+            remarkColumn.Name = "remarkColumn";
+            remarkColumn.HeaderText = "备注";
+            remarkColumn.FillWeight = 24F;
+            remarkColumn.MinimumWidth = Dpi.S(96);
+            remarkColumn.ReadOnly = false;
+            remarkColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
+            remarkColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
+            remarkColumn.DefaultCellStyle.Padding = Dpi.Pad(6, 0, 4, 0);
 
             DataGridViewTextBoxColumn startColumn = new DataGridViewTextBoxColumn();
             startColumn.Name = "startColumn";
-            startColumn.HeaderText = "开始时间";
-            startColumn.FillWeight = 20F;
-            startColumn.MinimumWidth = Dpi.S(84);
+            startColumn.HeaderText = "开始-结束";
+            startColumn.FillWeight = 26F;
+            startColumn.MinimumWidth = Dpi.S(116);
+            startColumn.ReadOnly = true;
             startColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
             DataGridViewTextBoxColumn plannedColumn = new DataGridViewTextBoxColumn();
             plannedColumn.Name = "plannedColumn";
             plannedColumn.HeaderText = "计时时长";
-            plannedColumn.FillWeight = 20F;
-            plannedColumn.MinimumWidth = Dpi.S(84);
+            plannedColumn.FillWeight = 15F;
+            plannedColumn.MinimumWidth = Dpi.S(76);
+            plannedColumn.ReadOnly = true;
             plannedColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
             DataGridViewTextBoxColumn actualColumn = new DataGridViewTextBoxColumn();
             actualColumn.Name = "actualColumn";
             actualColumn.HeaderText = "实际用时";
-            actualColumn.FillWeight = 20F;
-            actualColumn.MinimumWidth = Dpi.S(84);
+            actualColumn.FillWeight = 15F;
+            actualColumn.MinimumWidth = Dpi.S(76);
+            actualColumn.ReadOnly = true;
             actualColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
             DataGridViewTextBoxColumn overtimeColumn = new DataGridViewTextBoxColumn();
             overtimeColumn.Name = "overtimeColumn";
             overtimeColumn.HeaderText = "超时时长";
-            overtimeColumn.FillWeight = 20F;
-            overtimeColumn.MinimumWidth = Dpi.S(84);
+            overtimeColumn.FillWeight = 18F;
+            overtimeColumn.MinimumWidth = Dpi.S(88);
+            overtimeColumn.ReadOnly = true;
             overtimeColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
             DataGridViewButtonColumn deleteColumn = new DataGridViewButtonColumn();
@@ -842,6 +884,7 @@ namespace MeTimer
             deleteColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
             deleteColumn.Width = Dpi.S(72);
             deleteColumn.MinimumWidth = Dpi.S(64);
+            deleteColumn.ReadOnly = true;
             deleteColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
             deleteColumn.DefaultCellStyle.BackColor = Color.FromArgb(255, 244, 244);
             deleteColumn.DefaultCellStyle.ForeColor = UiTheme.Danger;
@@ -850,6 +893,7 @@ namespace MeTimer
             deleteColumn.DefaultCellStyle.Font = UiTheme.DangerBoldFont;
 
             _recordsGrid.Columns.Add(serialColumn);
+            _recordsGrid.Columns.Add(remarkColumn);
             _recordsGrid.Columns.Add(startColumn);
             _recordsGrid.Columns.Add(plannedColumn);
             _recordsGrid.Columns.Add(actualColumn);
@@ -917,6 +961,7 @@ namespace MeTimer
             _copyRecordsButton.Click += CopyRecordsButton_Click;
 
             _recordsGrid.CellContentClick += RecordsGrid_CellContentClick;
+            _recordsGrid.CellEndEdit += RecordsGrid_CellEndEdit;
             _display.UserHidden += Display_UserHidden;
             _display.LocationChanged += Display_LocationChanged;
         }
@@ -1133,7 +1178,7 @@ namespace MeTimer
         private string BuildRecordsTsv()
         {
             StringBuilder builder = new StringBuilder();
-            builder.Append("序号\t开始时间\t计时时长\t实际用时\t超时时长");
+            builder.Append("序号\t备注\t开始-结束\t计时时长\t实际用时\t超时时长");
 
             for (int i = 0; i < _records.Count; i++)
             {
@@ -1141,13 +1186,15 @@ namespace MeTimer
                 builder.Append("\r\n");
                 builder.Append(record.Serial.ToString(CultureInfo.InvariantCulture));
                 builder.Append('\t');
-                builder.Append(record.StartTime);
+                builder.Append(record.Remark);
+                builder.Append('\t');
+                builder.Append(record.TimeRangeText);
                 builder.Append('\t');
                 builder.Append(record.PlannedText);
                 builder.Append('\t');
                 builder.Append(TimeText.Format(record.ActualSeconds));
                 builder.Append('\t');
-                builder.Append(TimeText.Format(record.OvertimeSeconds));
+                builder.Append(TimeText.FormatSigned(record.OvertimeSeconds));
             }
 
             return builder.ToString();
@@ -1410,17 +1457,16 @@ namespace MeTimer
             if (_sessionMode == TimerMode.Countdown)
             {
                 plannedSeconds = _sessionPlannedSeconds;
-                if (actualSeconds >= _sessionPlannedSeconds)
+                overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
+                if (overtimeSeconds >= 0)
                 {
-                    overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
                     stoppedMainSeconds = overtimeSeconds;
                     stoppedDisplaySeconds = 0;
                 }
                 else
                 {
-                    long remainingSeconds = (long)_sessionPlannedSeconds - actualSeconds;
-                    stoppedMainSeconds = remainingSeconds;
-                    stoppedDisplaySeconds = remainingSeconds;
+                    stoppedMainSeconds = -overtimeSeconds;
+                    stoppedDisplaySeconds = -overtimeSeconds;
                 }
             }
             else
@@ -1428,10 +1474,11 @@ namespace MeTimer
                 if (_sessionPlannedSeconds > 0)
                 {
                     plannedSeconds = _sessionPlannedSeconds;
-                    if (actualSeconds > _sessionPlannedSeconds)
-                    {
-                        overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
-                    }
+                    overtimeSeconds = actualSeconds - _sessionPlannedSeconds;
+                }
+                else
+                {
+                    overtimeSeconds = 0;
                 }
 
                 stoppedMainSeconds = actualSeconds;
@@ -1441,6 +1488,7 @@ namespace MeTimer
             TimerRecord record = new TimerRecord();
             record.Serial = _nextSerial;
             record.StartTime = _sessionStartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            record.EndTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             record.PlannedSeconds = plannedSeconds;
             record.ActualSeconds = actualSeconds;
             record.OvertimeSeconds = overtimeSeconds;
@@ -1677,6 +1725,11 @@ namespace MeTimer
 
         private void RebuildRecordGrid()
         {
+            if (_recordsGrid.IsCurrentCellInEditMode)
+            {
+                _recordsGrid.EndEdit();
+            }
+
             _recordsGrid.SuspendLayout();
             try
             {
@@ -1687,19 +1740,25 @@ namespace MeTimer
                     TimerRecord record = _records[i];
                     int index = _recordsGrid.Rows.Add(
                         record.Serial,
-                        record.StartTime,
+                        record.Remark,
+                        record.TimeRangeText,
                         record.PlannedText,
                         TimeText.Format(record.ActualSeconds),
-                        TimeText.Format(record.OvertimeSeconds),
+                        TimeText.FormatSigned(record.OvertimeSeconds),
                         "删除");
 
                     DataGridViewRow row = _recordsGrid.Rows[index];
                     row.Tag = record;
 
+                    if (!string.IsNullOrEmpty(record.Remark))
+                    {
+                        row.Cells[1].ToolTipText = record.Remark;
+                    }
+
                     if (record.OvertimeSeconds > 0)
                     {
-                        row.Cells[4].Style.ForeColor = UiTheme.Danger;
-                        row.Cells[4].Style.Font = UiTheme.DangerBoldFont;
+                        row.Cells[5].Style.ForeColor = UiTheme.Danger;
+                        row.Cells[5].Style.Font = UiTheme.DangerBoldFont;
                     }
                 }
             }
@@ -1710,6 +1769,30 @@ namespace MeTimer
 
             _recordCountLabel.Text = _records.Count.ToString(CultureInfo.InvariantCulture) + " 条";
             UpdateCopyButtonState();
+        }
+
+        private void RecordsGrid_CellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0)
+            {
+                return;
+            }
+
+            if (_recordsGrid.Columns[e.ColumnIndex].Name != "remarkColumn")
+            {
+                return;
+            }
+
+            DataGridViewRow row = _recordsGrid.Rows[e.RowIndex];
+            TimerRecord record = row.Tag as TimerRecord;
+            if (record == null)
+            {
+                return;
+            }
+
+            object value = row.Cells[e.ColumnIndex].Value;
+            record.Remark = value == null ? string.Empty : value.ToString();
+            row.Cells[e.ColumnIndex].ToolTipText = record.Remark;
         }
 
         private void RecordsGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
