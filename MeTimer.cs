@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyProduct("咩计时")]
 [assembly: System.Reflection.AssemblyDescription("导播演讲计时工具")]
 [assembly: System.Reflection.AssemblyCompany("郑羊羊")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
 
 namespace MeTimer
 {
@@ -262,6 +262,7 @@ namespace MeTimer
     {
         private readonly Timer _uiTimer;
         private readonly Timer _copyFeedbackTimer;
+        private readonly Timer _cellCopyHintTimer;
         private readonly Stopwatch _stopwatch;
         private readonly TimerDisplayForm _display;
         private readonly List<TimerRecord> _records;
@@ -278,6 +279,7 @@ namespace MeTimer
         private NumericUpDown _minutesInput;
         private NumericUpDown _secondsInput;
         private CheckBox _showHoursCheck;
+        private CheckBox _showOvertimeCheck;
         private TrackBar _opacitySlider;
         private Label _opacityValueLabel;
         private Button _startButton;
@@ -297,14 +299,16 @@ namespace MeTimer
         private long _stoppedMainSeconds;
         private long _stoppedDisplaySeconds;
         private string _stoppedStatusText;
+        private bool _stoppedAlert;
         private int _nextSerial;
         private bool _initializing;
         private bool _closeConfirmed;
         private bool _paused;
         private bool _showHours;
+        private bool _showOvertimeExternally;
         private double _displayOpacity;
 
-        private const int DefaultDisplayOpacityPercent = 80;
+        private const int DefaultDisplayOpacityPercent = 100;
         private const int MinDisplayOpacityPercent = 10;
         private const int MaxDisplayOpacityPercent = 100;
 
@@ -317,9 +321,13 @@ namespace MeTimer
             _copyFeedbackTimer = new Timer();
             _copyFeedbackTimer.Interval = 1600;
             _copyFeedbackTimer.Tick += CopyFeedbackTimer_Tick;
+            _cellCopyHintTimer = new Timer();
+            _cellCopyHintTimer.Interval = 1600;
+            _cellCopyHintTimer.Tick += CellCopyHintTimer_Tick;
             _mode = TimerMode.Countdown;
             _phase = TimerPhase.Ready;
             _nextSerial = 1;
+            _showOvertimeExternally = true;
             _displayOpacity = DefaultDisplayOpacityPercent / 100D;
             _initializing = true;
 
@@ -399,6 +407,7 @@ namespace MeTimer
             _closeConfirmed = true;
             _uiTimer.Stop();
             _copyFeedbackTimer.Stop();
+            _cellCopyHintTimer.Stop();
             _stopwatch.Stop();
 
             if (_display != null && !_display.IsDisposed)
@@ -487,11 +496,12 @@ namespace MeTimer
             row.Dock = DockStyle.Top;
             row.AutoSize = true;
             row.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            row.ColumnCount = 3;
+            row.ColumnCount = 4;
             row.RowCount = 1;
             row.BackColor = UiTheme.PageBack;
             row.Margin = Dpi.Pad(2, 0, 0, 2);
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -507,6 +517,16 @@ namespace MeTimer
             _sessionInfoLabel.Margin = new Padding(0);
             _sessionInfoLabel.Text = "等待开始";
 
+            _showOvertimeCheck = new CheckBox();
+            _showOvertimeCheck.AutoSize = true;
+            _showOvertimeCheck.Text = "对外展示超时";
+            _showOvertimeCheck.Checked = true;
+            _showOvertimeCheck.Font = UiTheme.SmallFont;
+            _showOvertimeCheck.ForeColor = UiTheme.Muted;
+            _showOvertimeCheck.Anchor = AnchorStyles.Right;
+            _showOvertimeCheck.Margin = Dpi.Pad(8, 0, 8, 0);
+            _showOvertimeCheck.AccessibleDescription = "勾选后，超时后计时窗（窗口 2）与主窗一样背景变红，并继续顺计时而不是停在 00:00。";
+
             _showHoursCheck = new CheckBox();
             _showHoursCheck.AutoSize = true;
             _showHoursCheck.Text = "显示小时";
@@ -519,7 +539,8 @@ namespace MeTimer
 
             row.Controls.Add(_sessionInfoLabel, 0, 0);
             row.Controls.Add(BuildOpacityControl(), 1, 0);
-            row.Controls.Add(_showHoursCheck, 2, 0);
+            row.Controls.Add(_showOvertimeCheck, 2, 0);
+            row.Controls.Add(_showHoursCheck, 3, 0);
             return row;
         }
 
@@ -952,6 +973,7 @@ namespace MeTimer
             _minutesInput.ValueChanged += SettingInput_ValueChanged;
             _secondsInput.ValueChanged += SettingInput_ValueChanged;
             _showHoursCheck.CheckedChanged += ShowHoursCheck_CheckedChanged;
+            _showOvertimeCheck.CheckedChanged += ShowOvertimeCheck_CheckedChanged;
             _opacitySlider.ValueChanged += OpacitySlider_ValueChanged;
 
             _startButton.Click += StartButton_Click;
@@ -1119,7 +1141,7 @@ namespace MeTimer
 
             Screen current = GetDisplayScreen();
             Screen target = (current != null && !current.Primary) ? Screen.PrimaryScreen : secondary;
-            PositionDisplayAtDefaultLocation(target);
+            PositionDisplayKeepingAnchor(current, target);
 
             if (_display.Visible)
             {
@@ -1127,6 +1149,38 @@ namespace MeTimer
             }
 
             RefreshDisplayUi();
+        }
+
+        private void PositionDisplayKeepingAnchor(Screen current, Screen target)
+        {
+            if (target == null || _display == null || _display.IsDisposed)
+            {
+                return;
+            }
+
+            Rectangle targetArea = target.WorkingArea;
+            Rectangle currentArea = (current ?? target).WorkingArea;
+            int width = _display.Width;
+            int height = _display.Height;
+
+            // 靠近当前屏左半边就按左上角对齐，否则按右上角对齐
+            int centerX = _display.Left + width / 2;
+            bool anchorLeft = centerX < currentArea.Left + currentArea.Width / 2;
+
+            int topOffset = _display.Top - currentArea.Top;
+            int sideOffset = anchorLeft
+                ? _display.Left - currentArea.Left
+                : currentArea.Right - _display.Right;
+
+            int x = anchorLeft
+                ? targetArea.Left + sideOffset
+                : targetArea.Right - sideOffset - width;
+            int y = targetArea.Top + topOffset;
+
+            x = Math.Max(targetArea.Left, Math.Min(x, targetArea.Right - width));
+            y = Math.Max(targetArea.Top, Math.Min(y, targetArea.Bottom - height));
+
+            _display.Location = new Point(x, y);
         }
 
         private void CopyRecordsButton_Click(object sender, EventArgs e)
@@ -1265,6 +1319,17 @@ namespace MeTimer
             }
 
             _showHours = _showHoursCheck.Checked;
+            RefreshTimerUi(true);
+        }
+
+        private void ShowOvertimeCheck_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_initializing)
+            {
+                return;
+            }
+
+            _showOvertimeExternally = _showOvertimeCheck.Checked;
             RefreshTimerUi(true);
         }
 
@@ -1434,6 +1499,12 @@ namespace MeTimer
 
         private void StopButton_Click(object sender, EventArgs e)
         {
+            if (_phase == TimerPhase.Stopped)
+            {
+                ResetToConfigured();
+                return;
+            }
+
             if (_phase != TimerPhase.Running && _phase != TimerPhase.Overtime)
             {
                 return;
@@ -1498,6 +1569,7 @@ namespace MeTimer
             _phase = TimerPhase.Stopped;
             _stoppedMainSeconds = stoppedMainSeconds;
             _stoppedDisplaySeconds = stoppedDisplaySeconds;
+            _stoppedAlert = overtimeSeconds > 0;
             _stoppedStatusText = overtimeSeconds > 0
                 ? "已停止 · 本轮用时 " + TimeText.Format(actualSeconds) + " · 超时 " + TimeText.Format(overtimeSeconds)
                 : "已停止 · 本轮用时 " + TimeText.Format(actualSeconds);
@@ -1506,6 +1578,27 @@ namespace MeTimer
             RefreshInteractiveState();
             UpdateSessionInfo();
             RefreshTimerUi(true);
+        }
+
+        private void ResetToConfigured()
+        {
+            _uiTimer.Stop();
+            _stopwatch.Reset();
+            _paused = false;
+            _phase = TimerPhase.Ready;
+            _stoppedMainSeconds = 0;
+            _stoppedDisplaySeconds = 0;
+            _stoppedAlert = false;
+            _stoppedStatusText = string.Empty;
+            ClearInputError();
+            UpdateSessionInfo();
+            RefreshInteractiveState();
+            RefreshTimerUi(true);
+
+            if (_display.Visible)
+            {
+                _display.EnsureTopMost();
+            }
         }
 
         private void UiTimer_Tick(object sender, EventArgs e)
@@ -1536,6 +1629,7 @@ namespace MeTimer
             string displayText;
             string statusText;
             bool alert = false;
+            bool displayAlert = false;
 
             switch (_phase)
             {
@@ -1559,6 +1653,7 @@ namespace MeTimer
 
                         mainText = TimeText.FormatClock(elapsedSeconds, _showHours);
                         displayText = mainText;
+                        displayAlert = overTarget && _showOvertimeExternally;
 
                         if (_paused)
                         {
@@ -1581,17 +1676,39 @@ namespace MeTimer
                 case TimerPhase.Overtime:
                     long overtime = (long)Math.Floor(_stopwatch.Elapsed.TotalSeconds) - _sessionPlannedSeconds;
                     mainText = TimeText.FormatClock(overtime, _showHours);
-                    displayText = TimeText.FormatClock(0, _showHours);
-                    statusText = _paused
-                        ? "已暂停 · 本轮已超时"
-                        : "已超时，请点击“停止”结束本轮 · 计时窗已停住";
+
+                    if (_showOvertimeExternally)
+                    {
+                        displayText = mainText;
+                        displayAlert = true;
+                        statusText = _paused
+                            ? "已暂停 · 本轮已超时"
+                            : "已超时，请点击“停止”结束本轮 · 计时窗同步超时";
+                    }
+                    else
+                    {
+                        displayText = TimeText.FormatClock(0, _showHours);
+                        statusText = _paused
+                            ? "已暂停 · 本轮已超时"
+                            : "已超时，请点击“停止”结束本轮 · 计时窗已停住";
+                    }
+
                     alert = !_paused;
                     break;
 
                 case TimerPhase.Stopped:
                     mainText = TimeText.FormatClock(_stoppedMainSeconds, _showHours);
                     displayText = TimeText.FormatClock(_stoppedDisplaySeconds, _showHours);
+
+                    if (_stoppedAlert && _showOvertimeExternally)
+                    {
+                        // 停止前已超时：计时窗保持超时数值与红色背景，直到点击重置
+                        displayText = mainText;
+                        displayAlert = true;
+                    }
+
                     statusText = _stoppedStatusText;
+                    alert = _stoppedAlert;
                     break;
 
                 default:
@@ -1605,6 +1722,7 @@ namespace MeTimer
             SetLabelText(_mainTimeLabel, mainText);
             SetLabelText(_timerStatusLabel, statusText);
             _display.SetTimeText(displayText);
+            _display.SetAlertState(displayAlert);
 
             bool paused = _paused && (_phase == TimerPhase.Running || _phase == TimerPhase.Overtime);
             Color cardBack = paused ? UiTheme.PausedBack : alert ? UiTheme.AlertBack : UiTheme.TimerBack;
@@ -1641,10 +1759,11 @@ namespace MeTimer
 
             _startButton.Enabled = true;
             _startButton.Text = _paused ? "继续计时" : active ? "暂停计时" : "开始计时";
-            _stopButton.Enabled = active;
+            _stopButton.Enabled = active || _phase == TimerPhase.Stopped;
+            _stopButton.Text = _phase == TimerPhase.Stopped ? "重置" : "停止";
 
             StylePrimaryButton(_startButton, true);
-            StyleStopButton(active);
+            StyleStopButton(_stopButton.Enabled);
 
             _startButton.Cursor = Cursors.Hand;
             _stopButton.Cursor = _stopButton.Enabled ? Cursors.Hand : Cursors.Default;
@@ -1767,7 +1886,11 @@ namespace MeTimer
                 _recordsGrid.ResumeLayout();
             }
 
-            _recordCountLabel.Text = _records.Count.ToString(CultureInfo.InvariantCulture) + " 条";
+            if (!_cellCopyHintTimer.Enabled)
+            {
+                UpdateRecordCountLabel();
+            }
+
             UpdateCopyButtonState();
         }
 
@@ -1802,20 +1925,105 @@ namespace MeTimer
                 return;
             }
 
-            if (_recordsGrid.Columns[e.ColumnIndex].Name != "deleteColumn")
+            string columnName = _recordsGrid.Columns[e.ColumnIndex].Name;
+
+            if (columnName == "deleteColumn")
+            {
+                DataGridViewRow row = _recordsGrid.Rows[e.RowIndex];
+                TimerRecord record = row.Tag as TimerRecord;
+                if (record == null)
+                {
+                    return;
+                }
+
+                _records.Remove(record);
+                RebuildRecordGrid();
+                return;
+            }
+
+            if (!IsCopyableColumn(columnName))
             {
                 return;
             }
 
-            DataGridViewRow row = _recordsGrid.Rows[e.RowIndex];
-            TimerRecord record = row.Tag as TimerRecord;
-            if (record == null)
+            object value = _recordsGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value;
+            string text = value == null ? string.Empty : value.ToString();
+            if (string.IsNullOrWhiteSpace(text) || text == "—")
             {
                 return;
             }
 
-            _records.Remove(record);
-            RebuildRecordGrid();
+            if (!TryCopyText(text))
+            {
+                return;
+            }
+
+            ShowCellCopyHint(text);
+        }
+
+        private static bool IsCopyableColumn(string columnName)
+        {
+            return columnName == "serialColumn"
+                || columnName == "startColumn"
+                || columnName == "plannedColumn"
+                || columnName == "actualColumn"
+                || columnName == "overtimeColumn";
+        }
+
+        private static bool TryCopyText(string text)
+        {
+            try
+            {
+                Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                return true;
+            }
+            catch (Exception)
+            {
+                try
+                {
+                    System.Threading.Thread.Sleep(80);
+                    Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                    return true;
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+        }
+
+        private void ShowCellCopyHint(string text)
+        {
+            if (_recordCountLabel == null || _recordCountLabel.IsDisposed)
+            {
+                return;
+            }
+
+            _recordCountLabel.ForeColor = UiTheme.Primary;
+            _recordCountLabel.Text = "已复制 " + text;
+            _cellCopyHintTimer.Stop();
+            _cellCopyHintTimer.Start();
+        }
+
+        private void CellCopyHintTimer_Tick(object sender, EventArgs e)
+        {
+            _cellCopyHintTimer.Stop();
+            if (_recordCountLabel != null && !_recordCountLabel.IsDisposed)
+            {
+                _recordCountLabel.ForeColor = UiTheme.Muted;
+            }
+
+            UpdateRecordCountLabel();
+        }
+
+        private void UpdateRecordCountLabel()
+        {
+            if (_recordCountLabel == null || _recordCountLabel.IsDisposed)
+            {
+                return;
+            }
+
+            _recordCountLabel.Text = _records.Count.ToString(CultureInfo.InvariantCulture) + " 条";
         }
 
         private static void SetLabelText(Label label, string text)
@@ -1917,7 +2125,7 @@ namespace MeTimer
             AutoScaleMode = AutoScaleMode.None;
             Text = "咩计时 · 计时窗";
             FormBorderStyle = FormBorderStyle.None;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
             BackColor = UiTheme.TimerBack;
@@ -1966,7 +2174,8 @@ namespace MeTimer
             {
                 CreateParams cp = base.CreateParams;
                 cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
-                cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+                // 注意：不要加 WS_EX_TOOLWINDOW(0x80)，OBS 的窗口采集会过滤掉工具栏窗口，
+                // 导致计时窗在 OBS 的窗口列表里看不到。
                 return cp;
             }
         }
@@ -1982,6 +2191,27 @@ namespace MeTimer
                 {
                     FitTimerFont();
                 }
+            }
+        }
+
+        public void SetAlertState(bool alert)
+        {
+            Color back = alert ? UiTheme.AlertBack : UiTheme.TimerBack;
+            Color fore = alert ? UiTheme.AlertFore : Color.White;
+
+            if (BackColor != back)
+            {
+                BackColor = back;
+            }
+
+            if (_timeLabel.BackColor != back)
+            {
+                _timeLabel.BackColor = back;
+            }
+
+            if (_timeLabel.ForeColor != fore)
+            {
+                _timeLabel.ForeColor = fore;
             }
         }
 
