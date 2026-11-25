@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyProduct("咩计时")]
 [assembly: System.Reflection.AssemblyDescription("导播演讲计时工具")]
 [assembly: System.Reflection.AssemblyCompany("郑羊羊")]
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
 
 namespace MeTimer
 {
@@ -208,6 +208,12 @@ namespace MeTimer
             }
         }
 
+        // 已开始但还没停止的记录（列表里先占一行，方便提前写备注）
+        public bool InProgress
+        {
+            get { return string.IsNullOrEmpty(EndTime); }
+        }
+
         public string TimeRangeText
         {
             get
@@ -258,6 +264,123 @@ namespace MeTimer
         public static readonly Font DangerBoldFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
     }
 
+    internal sealed class CopiedTextEventArgs : EventArgs
+    {
+        public readonly string Text;
+
+        public CopiedTextEventArgs(string text)
+        {
+            Text = text;
+        }
+    }
+
+    /// <summary>
+    /// 计时记录表格。编辑单元格时 Ctrl+C 只复制编辑框里选中的文字，
+    /// 不再让表格把整行（整行选中模式下即整条记录）复制到剪贴板。
+    /// </summary>
+    internal sealed class RecordGrid : DataGridView
+    {
+        public event EventHandler<CopiedTextEventArgs> EditingTextCopied;
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (IsCopyShortcut(keyData) && CopyEditingSelection())
+            {
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        protected override void OnCellBeginEdit(DataGridViewCellCancelEventArgs e)
+        {
+            base.OnCellBeginEdit(e);
+
+            // 编辑期间关掉表格自身的复制，杜绝 Ctrl+C 复制整行
+            if (ClipboardCopyMode != DataGridViewClipboardCopyMode.Disable)
+            {
+                ClipboardCopyMode = DataGridViewClipboardCopyMode.Disable;
+            }
+        }
+
+        protected override void OnCellEndEdit(DataGridViewCellEventArgs e)
+        {
+            base.OnCellEndEdit(e);
+
+            if (ClipboardCopyMode != DataGridViewClipboardCopyMode.EnableWithAutoHeaderText)
+            {
+                ClipboardCopyMode = DataGridViewClipboardCopyMode.EnableWithAutoHeaderText;
+            }
+        }
+
+        private static bool IsCopyShortcut(Keys keyData)
+        {
+            return keyData == (Keys.Control | Keys.C)
+                || keyData == (Keys.Control | Keys.Insert);
+        }
+
+        private bool CopyEditingSelection()
+        {
+            if (!IsCurrentCellInEditMode)
+            {
+                return false;
+            }
+
+            TextBox box = EditingControl as TextBox;
+            if (box == null)
+            {
+                return false;
+            }
+
+            // 没有选中内容时也拦下快捷键：不复制任何东西
+            if (box.SelectionLength <= 0)
+            {
+                return true;
+            }
+
+            string selected = box.SelectedText;
+            if (string.IsNullOrEmpty(selected))
+            {
+                return true;
+            }
+
+            if (!TrySetClipboard(selected))
+            {
+                return true;
+            }
+
+            EventHandler<CopiedTextEventArgs> handler = EditingTextCopied;
+            if (handler != null)
+            {
+                handler(this, new CopiedTextEventArgs(selected));
+            }
+
+            return true;
+        }
+
+        private static bool TrySetClipboard(string text)
+        {
+            try
+            {
+                Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                return true;
+            }
+            catch (Exception)
+            {
+                try
+                {
+                    System.Threading.Thread.Sleep(80);
+                    Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                    return true;
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
     internal sealed class ControlForm : Form
     {
         private readonly Timer _uiTimer;
@@ -288,7 +411,7 @@ namespace MeTimer
         private Button _moveDisplayButton;
         private Button _copyRecordsButton;
         private Label _displayStateLabel;
-        private DataGridView _recordsGrid;
+        private RecordGrid _recordsGrid;
         private Label _recordCountLabel;
 
         private TimerMode _mode;
@@ -301,6 +424,7 @@ namespace MeTimer
         private string _stoppedStatusText;
         private bool _stoppedAlert;
         private int _nextSerial;
+        private TimerRecord _pendingRecord;
         private bool _initializing;
         private bool _closeConfirmed;
         private bool _paused;
@@ -809,7 +933,7 @@ namespace MeTimer
             header.Controls.Add(sectionLabel, 0, 0);
             header.Controls.Add(_recordCountLabel, 1, 0);
 
-            _recordsGrid = new DataGridView();
+            _recordsGrid = new RecordGrid();
             _recordsGrid.Dock = DockStyle.Fill;
             _recordsGrid.Margin = new Padding(0);
             _recordsGrid.Name = "recordsGrid";
@@ -981,9 +1105,11 @@ namespace MeTimer
             _toggleDisplayButton.Click += ToggleDisplayButton_Click;
             _moveDisplayButton.Click += MoveDisplayButton_Click;
             _copyRecordsButton.Click += CopyRecordsButton_Click;
+            _copyRecordsButton.MouseDown += CopyRecordsButton_MouseDown;
 
             _recordsGrid.CellContentClick += RecordsGrid_CellContentClick;
             _recordsGrid.CellEndEdit += RecordsGrid_CellEndEdit;
+            _recordsGrid.EditingTextCopied += RecordsGrid_EditingTextCopied;
             _display.UserHidden += Display_UserHidden;
             _display.LocationChanged += Display_LocationChanged;
         }
@@ -1220,6 +1346,48 @@ namespace MeTimer
             _copyFeedbackTimer.Start();
         }
 
+        // 右键复制纯文本：每条一行，不带序号，按序号 1、2、3… 的顺序
+        private void CopyRecordsButton_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right || _records.Count == 0)
+            {
+                return;
+            }
+
+            string text = BuildRecordsPlainText();
+            if (!TryCopyText(text))
+            {
+                MessageBox.Show(
+                    this,
+                    "无法写入剪贴板，请稍后再试。",
+                    "复制记录",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            _copyFeedbackTimer.Stop();
+            _copyRecordsButton.Text = "已复制纯文本记录";
+            _copyFeedbackTimer.Start();
+        }
+
+        private string BuildRecordsPlainText()
+        {
+            StringBuilder builder = new StringBuilder();
+
+            for (int i = 0; i < _records.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append("\r\n");
+                }
+
+                builder.Append(BuildRecordSummaryText(_records[i]));
+            }
+
+            return builder.ToString();
+        }
+
         private void CopyFeedbackTimer_Tick(object sender, EventArgs e)
         {
             _copyFeedbackTimer.Stop();
@@ -1445,6 +1613,7 @@ namespace MeTimer
             _phase = TimerPhase.Running;
 
             _uiTimer.Start();
+            AddPendingRecord();
             RefreshInteractiveState();
             UpdateSessionInfo();
             RefreshTimerUi(true);
@@ -1453,6 +1622,20 @@ namespace MeTimer
             {
                 _display.EnsureTopMost();
             }
+        }
+
+        // 开始计时就先在列表里占一行，方便边计时边写备注，其余数值等停止时再填
+        private void AddPendingRecord()
+        {
+            TimerRecord record = new TimerRecord();
+            record.Serial = _nextSerial;
+            record.StartTime = _sessionStartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            record.EndTime = string.Empty;
+            record.PlannedSeconds = _sessionPlannedSeconds > 0 ? (int?)_sessionPlannedSeconds : null;
+            _nextSerial++;
+            _records.Add(record);
+            _pendingRecord = record;
+            RebuildRecordGrid();
         }
 
         private void PauseSession()
@@ -1556,15 +1739,22 @@ namespace MeTimer
                 stoppedDisplaySeconds = actualSeconds;
             }
 
-            TimerRecord record = new TimerRecord();
-            record.Serial = _nextSerial;
+            TimerRecord record = _pendingRecord;
+            if (record == null)
+            {
+                // 占位行被删掉了：兜底新建一条
+                record = new TimerRecord();
+                record.Serial = _nextSerial;
+                _nextSerial++;
+                _records.Add(record);
+            }
+
             record.StartTime = _sessionStartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             record.EndTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             record.PlannedSeconds = plannedSeconds;
             record.ActualSeconds = actualSeconds;
             record.OvertimeSeconds = overtimeSeconds;
-            _nextSerial++;
-            _records.Add(record);
+            _pendingRecord = null;
 
             _phase = TimerPhase.Stopped;
             _stoppedMainSeconds = stoppedMainSeconds;
@@ -1842,6 +2032,17 @@ namespace MeTimer
             _inputErrorLabel.Visible = false;
         }
 
+        // 删除后序号按当前顺序重新排（1、2、3…），全部删完再计时就从 1 开始
+        private void RenumberRecords()
+        {
+            for (int i = 0; i < _records.Count; i++)
+            {
+                _records[i].Serial = i + 1;
+            }
+
+            _nextSerial = _records.Count + 1;
+        }
+
         private void RebuildRecordGrid()
         {
             if (_recordsGrid.IsCurrentCellInEditMode)
@@ -1862,8 +2063,8 @@ namespace MeTimer
                         record.Remark,
                         record.TimeRangeText,
                         record.PlannedText,
-                        TimeText.Format(record.ActualSeconds),
-                        TimeText.FormatSigned(record.OvertimeSeconds),
+                        record.InProgress ? string.Empty : TimeText.Format(record.ActualSeconds),
+                        record.InProgress ? string.Empty : TimeText.FormatSigned(record.OvertimeSeconds),
                         "删除");
 
                     DataGridViewRow row = _recordsGrid.Rows[index];
@@ -1937,7 +2138,31 @@ namespace MeTimer
                 }
 
                 _records.Remove(record);
+                if (ReferenceEquals(record, _pendingRecord))
+                {
+                    _pendingRecord = null;
+                }
+
+                RenumberRecords();
                 RebuildRecordGrid();
+                return;
+            }
+
+            if (columnName == "serialColumn")
+            {
+                TimerRecord serialRecord = _recordsGrid.Rows[e.RowIndex].Tag as TimerRecord;
+                if (serialRecord == null)
+                {
+                    return;
+                }
+
+                string summary = BuildRecordSummaryText(serialRecord);
+                if (!TryCopyText(summary))
+                {
+                    return;
+                }
+
+                ShowCellCopyHint(summary);
                 return;
             }
 
@@ -1963,11 +2188,28 @@ namespace MeTimer
 
         private static bool IsCopyableColumn(string columnName)
         {
-            return columnName == "serialColumn"
-                || columnName == "startColumn"
+            return columnName == "startColumn"
                 || columnName == "plannedColumn"
                 || columnName == "actualColumn"
                 || columnName == "overtimeColumn";
+        }
+
+        // 点击序号时复制：备注内容 + 发言时段 + 实际用时（不足 1 小时省略小时段）
+        private static string BuildRecordSummaryText(TimerRecord record)
+        {
+            if (record.InProgress)
+            {
+                return record.Remark + "发言" + record.StartTime;
+            }
+
+            return record.Remark
+                + "发言" + record.TimeRangeText
+                + "，共计" + TimeText.FormatClock(record.ActualSeconds, false);
+        }
+
+        private void RecordsGrid_EditingTextCopied(object sender, CopiedTextEventArgs e)
+        {
+            ShowCellCopyHint(e.Text);
         }
 
         private static bool TryCopyText(string text)
@@ -2000,9 +2242,22 @@ namespace MeTimer
             }
 
             _recordCountLabel.ForeColor = UiTheme.Primary;
-            _recordCountLabel.Text = "已复制 " + text;
+            _recordCountLabel.Text = "已复制 " + TrimHintText(text);
             _cellCopyHintTimer.Stop();
             _cellCopyHintTimer.Start();
+        }
+
+        // 提示文字过长会把「计时记录」标题挤掉，这里截断显示
+        private static string TrimHintText(string text)
+        {
+            const int MaxLength = 24;
+
+            if (string.IsNullOrEmpty(text) || text.Length <= MaxLength)
+            {
+                return text;
+            }
+
+            return text.Substring(0, MaxLength) + "…";
         }
 
         private void CellCopyHintTimer_Tick(object sender, EventArgs e)
