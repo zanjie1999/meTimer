@@ -11,8 +11,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyProduct("咩计时")]
 [assembly: System.Reflection.AssemblyDescription("导播演讲计时工具")]
 [assembly: System.Reflection.AssemblyCompany("郑羊羊")]
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")]
 
 namespace MeTimer
 {
@@ -97,6 +97,36 @@ namespace MeTimer
         public const uint SWP_NOACTIVATE = 0x0010;
         public const uint SWP_NOOWNERZORDER = 0x0200;
 
+        public const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+        public const int DWMWA_CLOAKED = 14;
+        public const int GWL_STYLE = -16;
+        public const int WS_CAPTION = 0x00C00000;
+        public const int WS_MAXIMIZE = 0x01000000;
+        public const uint LWA_ALPHA = 0x00000002;
+
+        [DllImport("user32.dll")]
+        public static extern bool GetLayeredWindowAttributes(IntPtr hWnd, out uint colorKey, out byte alpha, out uint flags);
+
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int Size;
+            public RECT Monitor;
+            public RECT Work;
+            public uint Flags;
+        }
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool SetWindowPos(
             IntPtr hWnd,
@@ -106,6 +136,172 @@ namespace MeTimer
             int cx,
             int cy,
             uint uFlags);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+        [DllImport("user32.dll")]
+        public static extern int GetWindowLong(IntPtr hWnd, int index);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO monitorInfo);
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
+    }
+
+    /// <summary>
+    /// 判断桌面上是否有应用正处于全屏（如 PPT 放映、浏览器 F11 全屏、视频全屏）。
+    /// 只要还有任意一个全屏窗口存在就算“全屏中”，这样放映时切到别的程序计时也不会中断。
+    /// </summary>
+    internal static class FullscreenDetector
+    {
+        private static readonly HashSet<string> IgnoredClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Progman",
+            "WorkerW",
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+            "ApplicationManager_DesktopShellWindow",
+            "Windows.UI.Core.CoreWindow",
+            "MultitaskingViewFrame",
+            "XamlExplorerHostIslandWindow"
+        };
+
+        private const int EdgeTolerance = 2;
+
+        public static bool IsFullscreenPresent(params IntPtr[] windowsToIgnore)
+        {
+            bool found = false;
+            uint currentProcessId = (uint)Process.GetCurrentProcess().Id;
+
+            NativeMethods.EnumWindows(
+                delegate(IntPtr hWnd, IntPtr lParam)
+                {
+                    try
+                    {
+                        if (IsFullscreenWindow(hWnd, currentProcessId, windowsToIgnore))
+                        {
+                            found = true;
+                            return false;
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    return true;
+                },
+                IntPtr.Zero);
+
+            return found;
+        }
+
+        private static bool IsFullscreenWindow(IntPtr hWnd, uint currentProcessId, IntPtr[] windowsToIgnore)
+        {
+            if (hWnd == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < windowsToIgnore.Length; i++)
+            {
+                if (windowsToIgnore[i] != IntPtr.Zero && windowsToIgnore[i] == hWnd)
+                {
+                    return false;
+                }
+            }
+
+            uint processId;
+            NativeMethods.GetWindowThreadProcessId(hWnd, out processId);
+            if (processId != 0 && processId == currentProcessId)
+            {
+                // 本程序自己的窗口（主窗、计时窗）不算
+                return false;
+            }
+
+            if (!NativeMethods.IsWindowVisible(hWnd) || NativeMethods.IsIconic(hWnd))
+            {
+                return false;
+            }
+
+            StringBuilder className = new StringBuilder(256);
+            if (NativeMethods.GetClassName(hWnd, className, className.Capacity) > 0
+                && IgnoredClasses.Contains(className.ToString()))
+            {
+                return false;
+            }
+
+            // UWP/虚拟桌面里被隐藏（cloaked）的窗口虽然在枚举里，但肉眼看不到
+            int cloaked;
+            if (NativeMethods.DwmGetWindowAttribute(hWnd, NativeMethods.DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0
+                && cloaked != 0)
+            {
+                return false;
+            }
+
+            // 显卡驱动 / 游戏 / 录屏软件的全屏覆盖层：可见但完全透明（alpha=0），不是真的在放映
+            uint colorKey;
+            byte alpha;
+            uint layeredFlags;
+            if (NativeMethods.GetLayeredWindowAttributes(hWnd, out colorKey, out alpha, out layeredFlags)
+                && (layeredFlags & NativeMethods.LWA_ALPHA) != 0
+                && alpha == 0)
+            {
+                return false;
+            }
+
+            NativeMethods.RECT windowRect;
+            if (!NativeMethods.GetWindowRect(hWnd, out windowRect))
+            {
+                return false;
+            }
+
+            // 副屏没有任务栏时，普通“最大化”窗口也会铺满整块屏；带标题栏的最大化窗口不算全屏
+            int style = NativeMethods.GetWindowLong(hWnd, NativeMethods.GWL_STYLE);
+            if ((style & NativeMethods.WS_MAXIMIZE) != 0
+                && (style & NativeMethods.WS_CAPTION) == NativeMethods.WS_CAPTION)
+            {
+                return false;
+            }
+
+            IntPtr monitor = NativeMethods.MonitorFromWindow(hWnd, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            if (monitor == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            NativeMethods.MONITORINFO info = new NativeMethods.MONITORINFO();
+            info.Size = Marshal.SizeOf(typeof(NativeMethods.MONITORINFO));
+            if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+            {
+                return false;
+            }
+
+            // 窗口四边都要盖住所在显示器（最大化窗口因为让出了任务栏，不会被算成全屏）
+            return windowRect.Left <= info.Monitor.Left + EdgeTolerance
+                && windowRect.Top <= info.Monitor.Top + EdgeTolerance
+                && windowRect.Right >= info.Monitor.Right - EdgeTolerance
+                && windowRect.Bottom >= info.Monitor.Bottom - EdgeTolerance;
+        }
     }
 
     internal enum TimerMode
@@ -386,6 +582,7 @@ namespace MeTimer
         private readonly Timer _uiTimer;
         private readonly Timer _copyFeedbackTimer;
         private readonly Timer _cellCopyHintTimer;
+        private readonly Timer _fullscreenWatchTimer;
         private readonly Stopwatch _stopwatch;
         private readonly TimerDisplayForm _display;
         private readonly List<TimerRecord> _records;
@@ -403,6 +600,7 @@ namespace MeTimer
         private NumericUpDown _secondsInput;
         private CheckBox _showHoursCheck;
         private CheckBox _showOvertimeCheck;
+        private CheckBox _fullscreenAutoCheck;
         private TrackBar _opacitySlider;
         private Label _opacityValueLabel;
         private Button _startButton;
@@ -430,6 +628,9 @@ namespace MeTimer
         private bool _paused;
         private bool _showHours;
         private bool _showOvertimeExternally;
+        private bool _fullscreenAutoEnabled;
+        private bool _lastFullscreenState;
+        private bool _autoStartSuppressed;
         private double _displayOpacity;
 
         private const int DefaultDisplayOpacityPercent = 100;
@@ -448,6 +649,9 @@ namespace MeTimer
             _cellCopyHintTimer = new Timer();
             _cellCopyHintTimer.Interval = 1600;
             _cellCopyHintTimer.Tick += CellCopyHintTimer_Tick;
+            _fullscreenWatchTimer = new Timer();
+            _fullscreenWatchTimer.Interval = 500;
+            _fullscreenWatchTimer.Tick += FullscreenWatchTimer_Tick;
             _mode = TimerMode.Countdown;
             _phase = TimerPhase.Ready;
             _nextSerial = 1;
@@ -532,6 +736,7 @@ namespace MeTimer
             _uiTimer.Stop();
             _copyFeedbackTimer.Stop();
             _cellCopyHintTimer.Stop();
+            _fullscreenWatchTimer.Stop();
             _stopwatch.Stop();
 
             if (_display != null && !_display.IsDisposed)
@@ -620,11 +825,12 @@ namespace MeTimer
             row.Dock = DockStyle.Top;
             row.AutoSize = true;
             row.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            row.ColumnCount = 4;
+            row.ColumnCount = 5;
             row.RowCount = 1;
             row.BackColor = UiTheme.PageBack;
             row.Margin = Dpi.Pad(2, 0, 0, 2);
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -661,10 +867,21 @@ namespace MeTimer
             _showHoursCheck.Margin = Dpi.Pad(8, 0, 2, 0);
             _showHoursCheck.AccessibleDescription = "勾选后计时时间始终显示小时；默认在不足 1 小时时显示分:秒。";
 
+            _fullscreenAutoCheck = new CheckBox();
+            _fullscreenAutoCheck.AutoSize = true;
+            _fullscreenAutoCheck.Text = "全屏自动计时";
+            _fullscreenAutoCheck.Checked = false;
+            _fullscreenAutoCheck.Font = UiTheme.SmallFont;
+            _fullscreenAutoCheck.ForeColor = UiTheme.Muted;
+            _fullscreenAutoCheck.Anchor = AnchorStyles.Right;
+            _fullscreenAutoCheck.Margin = Dpi.Pad(8, 0, 8, 0);
+            _fullscreenAutoCheck.AccessibleDescription = "勾选后，有应用进入全屏（如 PPT 放映、浏览器全屏）时自动开始计时，退出全屏时自动停止并重置。";
+
             row.Controls.Add(_sessionInfoLabel, 0, 0);
             row.Controls.Add(BuildOpacityControl(), 1, 0);
             row.Controls.Add(_showOvertimeCheck, 2, 0);
-            row.Controls.Add(_showHoursCheck, 3, 0);
+            row.Controls.Add(_fullscreenAutoCheck, 3, 0);
+            row.Controls.Add(_showHoursCheck, 4, 0);
             return row;
         }
 
@@ -1098,6 +1315,7 @@ namespace MeTimer
             _secondsInput.ValueChanged += SettingInput_ValueChanged;
             _showHoursCheck.CheckedChanged += ShowHoursCheck_CheckedChanged;
             _showOvertimeCheck.CheckedChanged += ShowOvertimeCheck_CheckedChanged;
+            _fullscreenAutoCheck.CheckedChanged += FullscreenAutoCheck_CheckedChanged;
             _opacitySlider.ValueChanged += OpacitySlider_ValueChanged;
 
             _startButton.Click += StartButton_Click;
@@ -1501,6 +1719,87 @@ namespace MeTimer
             RefreshTimerUi(true);
         }
 
+        private void FullscreenAutoCheck_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_initializing)
+            {
+                return;
+            }
+
+            _fullscreenAutoEnabled = _fullscreenAutoCheck.Checked;
+
+            if (!_fullscreenAutoEnabled)
+            {
+                _fullscreenWatchTimer.Stop();
+                return;
+            }
+
+            _autoStartSuppressed = false;
+            _lastFullscreenState = IsFullscreenNow();
+            _fullscreenWatchTimer.Start();
+
+            // 勾选时放映已经开始了，就直接开始计时，不用等下一次全屏
+            if (_lastFullscreenState)
+            {
+                StartForFullscreen();
+            }
+        }
+
+        private void FullscreenWatchTimer_Tick(object sender, EventArgs e)
+        {
+            if (!_fullscreenAutoEnabled)
+            {
+                _fullscreenWatchTimer.Stop();
+                return;
+            }
+
+            bool fullscreen = IsFullscreenNow();
+
+            if (fullscreen != _lastFullscreenState)
+            {
+                _lastFullscreenState = fullscreen;
+
+                if (fullscreen)
+                {
+                    _autoStartSuppressed = false;
+                }
+                else if (_phase == TimerPhase.Running || _phase == TimerPhase.Overtime)
+                {
+                    // 退出全屏：停止本轮（记录照常保存）并回到准备状态
+                    StopSession();
+                    ResetToConfigured();
+                    return;
+                }
+            }
+
+            if (fullscreen)
+            {
+                StartForFullscreen();
+            }
+        }
+
+        // 全屏期间只要没在计时就开始；手动停止过的那一轮不再自动重启
+        private void StartForFullscreen()
+        {
+            if (_autoStartSuppressed)
+            {
+                return;
+            }
+
+            if (_phase == TimerPhase.Running || _phase == TimerPhase.Overtime)
+            {
+                return;
+            }
+
+            TryStartSession(false);
+        }
+
+        private bool IsFullscreenNow()
+        {
+            IntPtr displayHandle = _display != null && _display.IsHandleCreated ? _display.Handle : IntPtr.Zero;
+            return FullscreenDetector.IsFullscreenPresent(Handle, displayHandle);
+        }
+
         private void OpacitySlider_ValueChanged(object sender, EventArgs e)
         {
             if (_initializing)
@@ -1593,14 +1892,24 @@ namespace MeTimer
                 return;
             }
 
+            TryStartSession(true);
+        }
+
+        // reportError 为 false 时（全屏自动开始）只静默放弃，不弹提示也不抢焦点
+        private bool TryStartSession(bool reportError)
+        {
             TimerMode selectedMode = _countUpRadio.Checked ? TimerMode.CountUp : TimerMode.Countdown;
             int plannedSeconds = ReadConfiguredSeconds();
 
             if (selectedMode == TimerMode.Countdown && plannedSeconds <= 0)
             {
-                ShowInputError("请先把倒计时时长设置为大于 0 的时间。");
-                _hoursInput.Focus();
-                return;
+                if (reportError)
+                {
+                    ShowInputError("请先把倒计时时长设置为大于 0 的时间。");
+                    _hoursInput.Focus();
+                }
+
+                return false;
             }
 
             ClearInputError();
@@ -1622,6 +1931,8 @@ namespace MeTimer
             {
                 _display.EnsureTopMost();
             }
+
+            return true;
         }
 
         // 开始计时就先在列表里占一行，方便边计时边写备注，其余数值等停止时再填
@@ -1682,6 +1993,12 @@ namespace MeTimer
 
         private void StopButton_Click(object sender, EventArgs e)
         {
+            if (_fullscreenAutoEnabled)
+            {
+                // 手动停止 / 重置过本轮，就不再被全屏自动拉起，等下一次进入全屏
+                _autoStartSuppressed = true;
+            }
+
             if (_phase == TimerPhase.Stopped)
             {
                 ResetToConfigured();
@@ -1693,6 +2010,11 @@ namespace MeTimer
                 return;
             }
 
+            StopSession();
+        }
+
+        private void StopSession()
+        {
             _stopwatch.Stop();
             _uiTimer.Stop();
             _paused = false;
